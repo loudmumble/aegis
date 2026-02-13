@@ -1,0 +1,14 @@
+Metadata-Version: 2.4
+Name: aegis-ids
+Version: 0.1.0
+Summary: Agentic intrusion detection — detects LLM-driven attacks via cadence analysis and intent chain correlation
+Requires-Python: >=3.10
+Requires-Dist: httpx>=0.27
+Requires-Dist: rich>=13.0
+Requires-Dist: click>=8.0
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: scapy>=2.5
+Requires-Dist: numpy>=1.24
+Provides-Extra: full
+Requires-Dist: scikit-learn>=1.3; extra == "full"
+Requires-Dist: scipy>=1.11; extra == "full"
