@@ -1,0 +1,7 @@
+startCommand:
+  type: stdio
+  configSchema: {}
+  commandFunction:
+    - python
+    - -m
+    - aegis.mcp_server
