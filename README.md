@@ -14,16 +14,18 @@ Detect AI-driven attacks by their behavioral cadence — catches what signature-
 
 ## Installation
 
+A pre-built linux/amd64 binary is in `build/`. No Python required.
+
 ```bash
-# Clone the repository
-git clone https://gitlab.loudmumble.com:8929/loudmumble/aegis
-cd aegis
+# Use pre-built binary (no dependencies needed)
+./build/aegis --help
 
-# Install via pip
-pip install aegis-ids
+# Or install from source
+pip install -e .
+pip install -e ".[full]"   # with ML analysis suite (numpy, scikit-learn)
 
-# Install ML analysis suite (numpy, scikit-learn)
-pip install aegis-ids[full]
+# Or build a standalone binary yourself
+make build          # produces build/aegis
 ```
 
 ## Quick Start
