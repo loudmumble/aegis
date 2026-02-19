@@ -1,4 +1,4 @@
-.PHONY: install build test clean
+.PHONY: install build build-ui test clean
 
 BINARY_NAME := aegis
 BUILD_DIR   := build
@@ -20,6 +20,13 @@ build: install
 		--paths src \
 		$(BUILD_DIR)/.work/entry.py
 	@echo "Built: $(BUILD_DIR)/$(BINARY_NAME)"
+
+GO := $(HOME)/go-sdk/go/bin/go
+
+build-ui:
+	@mkdir -p $(BUILD_DIR)
+	cd ui && CGO_ENABLED=1 $(GO) build -ldflags="-s -w" -o ../$(BUILD_DIR)/$(BINARY_NAME)-ui .
+	@echo "Built: $(BUILD_DIR)/$(BINARY_NAME)-ui"
 
 test:
 	python3 -m pytest tests/ -q
