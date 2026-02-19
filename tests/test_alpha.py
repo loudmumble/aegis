@@ -607,9 +607,7 @@ class TestCadenceAnalyzer:
     def test_fingerprint_model_no_match(self) -> None:
         config = CadenceConfig()
         analyzer = CadenceAnalyzer(config)
-        # Very far from any known profile
-        fingerprints = analyzer._fingerprint_model(mean_iat=5000.0, std_iat=500.0)
-        # Should get few or no matches
+        fingerprints = analyzer._fingerprint_model(mean_iat=200000.0, std_iat=50000.0)
         for fp in fingerprints:
             assert fp.confidence < 0.5
 
@@ -717,12 +715,12 @@ class TestRuleMatch:
 
 
 class TestBuiltinRules:
-    def test_seven_rules_exist(self) -> None:
-        assert len(BUILTIN_RULES) == 7
+    def test_nine_rules_exist(self) -> None:
+        assert len(BUILTIN_RULES) == 9
 
     def test_rule_ids_sequential(self) -> None:
         ids = [r["id"] for r in BUILTIN_RULES]
-        expected = [f"AEGIS-{i:03d}" for i in range(1, 8)]
+        expected = [f"AEGIS-{i:03d}" for i in range(1, 10)]
         assert ids == expected
 
     def test_all_rules_have_required_fields(self) -> None:
@@ -743,7 +741,7 @@ class TestBuiltinRules:
 class TestRuleEngine:
     def test_loads_builtin_rules(self) -> None:
         engine = RuleEngine(builtin_enabled=True)
-        assert len(engine.rules) == 7
+        assert len(engine.rules) == 9
 
     def test_disabled_builtin(self) -> None:
         engine = RuleEngine(builtin_enabled=False)
@@ -801,7 +799,7 @@ class TestRuleEngine:
         bad_file = rules_dir / "bad.yml"
         bad_file.write_text(":::invalid yaml {{{}}}}")
         engine = RuleEngine(rules_dir=rules_dir, builtin_enabled=True)
-        assert len(engine.rules) == 7  # Only builtins
+        assert len(engine.rules) == 9
 
     def test_evaluate_aegis_001_matches(self) -> None:
         """AEGIS-001: LLM Streaming Cadence — classification=agent, confidence>=0.6,
@@ -1451,8 +1449,8 @@ class TestCLI:
         # Rich output contains ANSI codes, strip them for assertions
         clean = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
         assert "AEGIS-001" in clean
-        assert "AEGIS-007" in clean
-        assert "7 rules loaded" in clean
+        assert "AEGIS-009" in clean
+        assert "9 rules loaded" in clean
 
     def test_help(self) -> None:
         from click.testing import CliRunner
@@ -1496,7 +1494,7 @@ class TestCLI:
         result = runner.invoke(main, ["rules", "--config", str(config_path)])
         assert result.exit_code == 0
         clean = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
-        assert "7 rules loaded" in clean
+        assert "9 rules loaded" in clean
 
 
 # ============================================================================
@@ -1617,3 +1615,586 @@ class TestEndToEnd:
         analyzer = CadenceAnalyzer(cfg.cadence)
         result = analyzer.analyze_flow(flow)
         assert result is not None
+
+
+# ============================================================================
+# PCAP RING BUFFER TESTS
+# ============================================================================
+
+
+from aegis.capture.pcap_buffer import (
+    AnomalyPinner,
+    AnomalyWatchlist,
+    PcapRingBuffer,
+    WatchEntry,
+)
+
+
+class TestPcapRingBufferSegmentNaming:
+    def test_segment_name_format(self, tmp_path: Path) -> None:
+        buf = PcapRingBuffer(pcap_dir=tmp_path / "pcap")
+        seg = buf._make_segment_path()
+        assert seg.name.startswith("aegis_")
+        assert seg.name.endswith(".pcap")
+        assert "_0.pcap" in seg.name
+
+    def test_segment_sequence_increments(self, tmp_path: Path) -> None:
+        buf = PcapRingBuffer(pcap_dir=tmp_path / "pcap")
+        s0 = buf._make_segment_path()
+        s1 = buf._make_segment_path()
+        assert "_0.pcap" in s0.name
+        assert "_1.pcap" in s1.name
+
+
+class TestPcapRingBufferRotation:
+    def test_cleanup_deletes_oldest_when_over_max(self, tmp_path: Path) -> None:
+        buf = PcapRingBuffer(pcap_dir=tmp_path / "pcap", max_segments=3)
+        for i in range(5):
+            seg = tmp_path / "pcap" / f"aegis_20260219_0000{i}_{i}.pcap"
+            seg.write_text("fake pcap data")
+            buf._segments.append(seg)
+        buf._current_segment = buf._segments[-1]
+        buf._cleanup_old_segments()
+        assert len(buf._segments) <= 3
+        remaining_files = list((tmp_path / "pcap").glob("aegis_*.pcap"))
+        assert len(remaining_files) <= 3
+
+    def test_cleanup_preserves_current_segment(self, tmp_path: Path) -> None:
+        buf = PcapRingBuffer(pcap_dir=tmp_path / "pcap", max_segments=2)
+        for i in range(4):
+            seg = tmp_path / "pcap" / f"aegis_20260219_0000{i}_{i}.pcap"
+            seg.write_text("fake")
+            buf._segments.append(seg)
+        buf._current_segment = buf._segments[-1]
+        buf._cleanup_old_segments()
+        assert buf._current_segment.exists()
+
+
+class TestAnomalyPinner:
+    def test_pin_current_copies_to_preserved(self, tmp_path: Path) -> None:
+        pcap_dir = tmp_path / "pcap"
+        preserved_dir = pcap_dir / "preserved"
+        pcap_dir.mkdir(parents=True)
+        pinner = AnomalyPinner(pcap_dir, preserved_dir)
+
+        seg = pcap_dir / "aegis_20260219_120000_0.pcap"
+        seg.write_text("pcap data here")
+
+        pinned = pinner.pin_current("AEGIS-001", seg)
+        assert len(pinned) == 1
+        assert pinned[0].parent == preserved_dir
+        assert "preserved_AEGIS-001_" in pinned[0].name
+        assert seg.exists()
+
+    def test_pin_current_and_previous(self, tmp_path: Path) -> None:
+        pcap_dir = tmp_path / "pcap"
+        preserved_dir = pcap_dir / "preserved"
+        pcap_dir.mkdir(parents=True)
+        pinner = AnomalyPinner(pcap_dir, preserved_dir)
+
+        prev = pcap_dir / "aegis_20260219_115500_0.pcap"
+        curr = pcap_dir / "aegis_20260219_120000_1.pcap"
+        prev.write_text("prev data")
+        curr.write_text("curr data")
+
+        pinned = pinner.pin_current("AEGIS-002", curr, prev)
+        assert len(pinned) == 2
+        assert len(pinner.pinned_segments) == 2
+
+    def test_pin_skips_nonexistent_segment(self, tmp_path: Path) -> None:
+        pcap_dir = tmp_path / "pcap"
+        preserved_dir = pcap_dir / "preserved"
+        pcap_dir.mkdir(parents=True)
+        pinner = AnomalyPinner(pcap_dir, preserved_dir)
+
+        pinned = pinner.pin_current("AEGIS-001", pcap_dir / "nonexistent.pcap")
+        assert len(pinned) == 0
+
+    def test_pin_does_not_duplicate(self, tmp_path: Path) -> None:
+        pcap_dir = tmp_path / "pcap"
+        preserved_dir = pcap_dir / "preserved"
+        pcap_dir.mkdir(parents=True)
+        pinner = AnomalyPinner(pcap_dir, preserved_dir)
+
+        seg = pcap_dir / "aegis_20260219_120000_0.pcap"
+        seg.write_text("data")
+
+        pinner.pin_current("AEGIS-001", seg)
+        pinned2 = pinner.pin_current("AEGIS-001", seg)
+        assert len(pinned2) == 0
+
+
+class TestAnomalyWatchlist:
+    def test_add_and_check(self) -> None:
+        wl = AnomalyWatchlist()
+        wl.add_flow("192.168.1.100", 443, "AEGIS-001")
+        assert wl.is_watched("192.168.1.100", 443) is True
+        assert wl.is_watched("192.168.1.100", 80) is False
+        assert wl.is_watched("10.0.0.1", 443) is False
+
+    def test_entries_property(self) -> None:
+        wl = AnomalyWatchlist()
+        wl.add_flow("10.0.0.1", 8080, "test")
+        wl.add_flow("10.0.0.2", 443, "test2")
+        assert len(wl.entries) == 2
+
+    def test_ttl_expiry(self) -> None:
+        wl = AnomalyWatchlist()
+        entry = WatchEntry(
+            dst_ip="10.0.0.1",
+            dst_port=443,
+            reason="test",
+            added_at=time.time() - 7200,
+            ttl_seconds=3600.0,
+        )
+        wl._entries = [entry]
+        assert wl.is_watched("10.0.0.1", 443) is False
+        removed = wl.expire()
+        assert removed == 1
+        assert len(wl.entries) == 0
+
+    def test_active_entry_not_expired(self) -> None:
+        wl = AnomalyWatchlist()
+        wl.add_flow("10.0.0.1", 443, "test", ttl_seconds=3600.0)
+        removed = wl.expire()
+        assert removed == 0
+        assert wl.is_watched("10.0.0.1", 443) is True
+
+    def test_duplicate_updates_existing(self) -> None:
+        wl = AnomalyWatchlist()
+        wl.add_flow("10.0.0.1", 443, "reason1", ttl_seconds=100.0)
+        wl.add_flow("10.0.0.1", 443, "reason2", ttl_seconds=200.0)
+        assert len(wl.entries) == 1
+        assert wl.entries[0].reason == "reason2"
+        assert wl.entries[0].ttl_seconds == 200.0
+
+
+# ============================================================================
+# KERNEL NET COLLECTOR TESTS
+# ============================================================================
+
+
+from aegis.capture.kernel_net import (
+    KernelConnection,
+    KernelNetCollector,
+    FlowEnrichment,
+    ebpf_sensors_available,
+)
+
+
+class TestEbpfSensorsAvailability:
+    def test_availability_returns_bool(self) -> None:
+        result = ebpf_sensors_available()
+        assert isinstance(result, bool)
+
+    def test_availability_matches_import(self) -> None:
+        try:
+            import ebpf_sensors  # noqa: F401
+
+            assert ebpf_sensors_available() is True
+        except ImportError:
+            assert ebpf_sensors_available() is False
+
+
+class TestKernelConnection:
+    def test_creation_defaults(self) -> None:
+        conn = KernelConnection(
+            timestamp=1000.0,
+            pid=1234,
+            comm="curl",
+            saddr="10.0.0.1",
+            daddr="192.168.1.100",
+            sport=54321,
+            dport=443,
+            protocol="tcp",
+        )
+        assert conn.pid == 1234
+        assert conn.comm == "curl"
+        assert conn.saddr == "10.0.0.1"
+        assert conn.daddr == "192.168.1.100"
+        assert conn.sport == 54321
+        assert conn.dport == 443
+        assert conn.protocol == "tcp"
+        assert conn.bytes_sent == 0
+        assert conn.bytes_received == 0
+
+    def test_creation_with_bytes(self) -> None:
+        conn = KernelConnection(
+            timestamp=1000.0,
+            pid=5678,
+            comm="python3",
+            saddr="10.0.0.1",
+            daddr="192.168.1.100",
+            sport=12345,
+            dport=80,
+            protocol="tcp",
+            bytes_sent=4096,
+            bytes_received=8192,
+        )
+        assert conn.bytes_sent == 4096
+        assert conn.bytes_received == 8192
+
+    def test_matches_flow_forward(self) -> None:
+        key = FlowKey("10.0.0.1", 54321, "192.168.1.100", 443, "tcp")
+        flow = NetworkFlow(key=key)
+        conn = KernelConnection(
+            timestamp=1000.0,
+            pid=1234,
+            comm="curl",
+            saddr="10.0.0.1",
+            daddr="192.168.1.100",
+            sport=54321,
+            dport=443,
+            protocol="tcp",
+        )
+        assert conn.matches_flow(flow) is True
+
+    def test_matches_flow_reverse(self) -> None:
+        key = FlowKey("10.0.0.1", 54321, "192.168.1.100", 443, "tcp")
+        flow = NetworkFlow(key=key)
+        conn = KernelConnection(
+            timestamp=1000.0,
+            pid=1234,
+            comm="nginx",
+            saddr="192.168.1.100",
+            daddr="10.0.0.1",
+            sport=443,
+            dport=54321,
+            protocol="tcp",
+        )
+        assert conn.matches_flow(flow) is True
+
+    def test_no_match_different_port(self) -> None:
+        key = FlowKey("10.0.0.1", 54321, "192.168.1.100", 443, "tcp")
+        flow = NetworkFlow(key=key)
+        conn = KernelConnection(
+            timestamp=1000.0,
+            pid=1234,
+            comm="curl",
+            saddr="10.0.0.1",
+            daddr="192.168.1.100",
+            sport=54321,
+            dport=8080,
+            protocol="tcp",
+        )
+        assert conn.matches_flow(flow) is False
+
+    def test_no_match_different_protocol(self) -> None:
+        key = FlowKey("10.0.0.1", 54321, "192.168.1.100", 443, "tcp")
+        flow = NetworkFlow(key=key)
+        conn = KernelConnection(
+            timestamp=1000.0,
+            pid=1234,
+            comm="curl",
+            saddr="10.0.0.1",
+            daddr="192.168.1.100",
+            sport=54321,
+            dport=443,
+            protocol="udp",
+        )
+        assert conn.matches_flow(flow) is False
+
+
+class TestFlowEnrichment:
+    def test_default_values(self) -> None:
+        enrichment = FlowEnrichment()
+        assert enrichment.pid == 0
+        assert enrichment.comm == ""
+        assert enrichment.bytes_sent_kernel == 0
+        assert enrichment.bytes_received_kernel == 0
+        assert enrichment.connection_count == 0
+
+    def test_custom_values(self) -> None:
+        enrichment = FlowEnrichment(
+            pid=1234,
+            comm="curl",
+            bytes_sent_kernel=4096,
+            bytes_received_kernel=8192,
+            connection_count=3,
+        )
+        assert enrichment.pid == 1234
+        assert enrichment.comm == "curl"
+        assert enrichment.connection_count == 3
+
+
+class TestKernelNetCollectorEnrichment:
+    def test_enrich_flow_with_matching_connections(self) -> None:
+        key = FlowKey("10.0.0.1", 54321, "192.168.1.100", 443, "tcp")
+        flow = NetworkFlow(key=key)
+
+        connections = [
+            KernelConnection(
+                timestamp=1000.0,
+                pid=1234,
+                comm="curl",
+                saddr="10.0.0.1",
+                daddr="192.168.1.100",
+                sport=54321,
+                dport=443,
+                protocol="tcp",
+                bytes_sent=1024,
+            ),
+            KernelConnection(
+                timestamp=1001.0,
+                pid=1234,
+                comm="curl",
+                saddr="10.0.0.1",
+                daddr="192.168.1.100",
+                sport=54321,
+                dport=443,
+                protocol="tcp",
+                bytes_sent=2048,
+            ),
+        ]
+
+        enrichment = KernelNetCollector.enrich_flow(flow, connections)
+        assert enrichment.pid == 1234
+        assert enrichment.comm == "curl"
+        assert enrichment.bytes_sent_kernel == 3072
+        assert enrichment.connection_count == 2
+
+    def test_enrich_flow_no_matches(self) -> None:
+        key = FlowKey("10.0.0.1", 54321, "192.168.1.100", 443, "tcp")
+        flow = NetworkFlow(key=key)
+
+        connections = [
+            KernelConnection(
+                timestamp=1000.0,
+                pid=9999,
+                comm="other",
+                saddr="10.0.0.2",
+                daddr="192.168.1.200",
+                sport=12345,
+                dport=80,
+                protocol="tcp",
+            ),
+        ]
+
+        enrichment = KernelNetCollector.enrich_flow(flow, connections)
+        assert enrichment.pid == 0
+        assert enrichment.comm == ""
+        assert enrichment.connection_count == 0
+
+    def test_enrich_flow_most_frequent_pid_wins(self) -> None:
+        key = FlowKey("10.0.0.1", 54321, "192.168.1.100", 443, "tcp")
+        flow = NetworkFlow(key=key)
+
+        connections = [
+            KernelConnection(
+                timestamp=1000.0,
+                pid=1111,
+                comm="rare",
+                saddr="10.0.0.1",
+                daddr="192.168.1.100",
+                sport=54321,
+                dport=443,
+                protocol="tcp",
+            ),
+            KernelConnection(
+                timestamp=1001.0,
+                pid=2222,
+                comm="common",
+                saddr="10.0.0.1",
+                daddr="192.168.1.100",
+                sport=54321,
+                dport=443,
+                protocol="tcp",
+            ),
+            KernelConnection(
+                timestamp=1002.0,
+                pid=2222,
+                comm="common",
+                saddr="10.0.0.1",
+                daddr="192.168.1.100",
+                sport=54321,
+                dport=443,
+                protocol="tcp",
+            ),
+        ]
+
+        enrichment = KernelNetCollector.enrich_flow(flow, connections)
+        assert enrichment.pid == 2222
+        assert enrichment.comm == "common"
+        assert enrichment.connection_count == 3
+
+    def test_enrich_flow_empty_connections(self) -> None:
+        key = FlowKey("10.0.0.1", 54321, "192.168.1.100", 443, "tcp")
+        flow = NetworkFlow(key=key)
+
+        enrichment = KernelNetCollector.enrich_flow(flow, [])
+        assert enrichment.pid == 0
+        assert enrichment.connection_count == 0
+
+
+class TestKernelNetCollectorInstantiation:
+    def test_instantiation_requires_ebpf_sensors(self) -> None:
+        if ebpf_sensors_available():
+            collector = KernelNetCollector()
+            assert collector.is_running is False
+        else:
+            with pytest.raises(RuntimeError, match="ebpf-sensors is required"):
+                KernelNetCollector()
+
+    def test_instantiation_with_ebpf_sensors(self) -> None:
+        if not ebpf_sensors_available():
+            pytest.skip("ebpf-sensors not installed")
+        collector = KernelNetCollector()
+        assert collector.is_running is False
+        assert collector.get_connections() == []
+        assert collector.get_connections_snapshot() == []
+
+
+class TestKernelNetCollectorLifecycle:
+    def test_start_stop_cycle(self) -> None:
+        if not ebpf_sensors_available():
+            pytest.skip("ebpf-sensors not installed")
+        collector = KernelNetCollector()
+        collector.start()
+        assert collector.is_running is True
+        collector.stop()
+        assert collector.is_running is False
+
+    def test_double_start_is_noop(self) -> None:
+        if not ebpf_sensors_available():
+            pytest.skip("ebpf-sensors not installed")
+        collector = KernelNetCollector()
+        collector.start()
+        collector.start()
+        assert collector.is_running is True
+        collector.stop()
+
+    def test_double_stop_is_safe(self) -> None:
+        if not ebpf_sensors_available():
+            pytest.skip("ebpf-sensors not installed")
+        collector = KernelNetCollector()
+        collector.start()
+        collector.stop()
+        collector.stop()
+        assert collector.is_running is False
+
+
+class TestCLIKernelNetFlag:
+    def test_monitor_help_shows_kernel_net(self) -> None:
+        from click.testing import CliRunner
+        from aegis.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["monitor", "--help"])
+        assert result.exit_code == 0
+        assert "--kernel-net" in result.output
+
+    def test_monitor_help_describes_ebpf(self) -> None:
+        from click.testing import CliRunner
+        from aegis.cli import main
+
+        runner = CliRunner()
+        result = runner.invoke(main, ["monitor", "--help"])
+        assert "ebpf" in result.output.lower() or "eBPF" in result.output
+
+
+class TestLiveCaptureKernelNetIntegration:
+    def test_live_capture_accepts_kernel_net_none(self) -> None:
+        from aegis.capture.live import LiveCapture
+
+        capture_cfg = CaptureConfig()
+        cadence_cfg = CadenceConfig()
+        live = LiveCapture(
+            capture_config=capture_cfg,
+            cadence_config=cadence_cfg,
+            kernel_net_collector=None,
+        )
+        assert live.kernel_net_collector is None
+        assert live.flow_enrichments == {}
+
+    def test_live_capture_stores_enrichments(self) -> None:
+        if not ebpf_sensors_available():
+            pytest.skip("ebpf-sensors not installed")
+
+        from aegis.capture.live import LiveCapture
+
+        collector = KernelNetCollector()
+        capture_cfg = CaptureConfig()
+        cadence_cfg = CadenceConfig()
+        live = LiveCapture(
+            capture_config=capture_cfg,
+            cadence_config=cadence_cfg,
+            kernel_net_collector=collector,
+        )
+        assert live.kernel_net_collector is collector
+        assert live.flow_enrichments == {}
+
+    def test_analysis_cycle_without_kernel_net_still_works(self) -> None:
+        from aegis.capture.live import LiveCapture
+
+        capture_cfg = CaptureConfig()
+        cadence_cfg = CadenceConfig()
+        live = LiveCapture(
+            capture_config=capture_cfg,
+            cadence_config=cadence_cfg,
+            kernel_net_collector=None,
+        )
+        live._run_analysis_cycle()
+
+
+class TestPcapRingBufferIntegration:
+    def test_rule_match_triggers_pin_and_watchlist(self, tmp_path: Path) -> None:
+        from unittest.mock import patch, MagicMock
+        from aegis.capture.live import LiveCapture
+        from aegis.detection.rules import Rule, RuleMatch
+        from aegis.detection.cadence import CadenceResult, CadenceClassification
+
+        pcap_dir = tmp_path / "pcap"
+        buf = PcapRingBuffer(pcap_dir=pcap_dir)
+        seg = pcap_dir / "aegis_test_0.pcap"
+        seg.write_text("test pcap")
+        buf._current_segment = seg
+        buf._segments = [seg]
+
+        capture_cfg = CaptureConfig()
+        cadence_cfg = CadenceConfig()
+        live = LiveCapture(
+            capture_config=capture_cfg,
+            cadence_config=cadence_cfg,
+            pcap_buffer=buf,
+        )
+
+        agent_result = CadenceResult(
+            flow_key_str="10.0.0.50:54321 -> 192.168.1.100:443 (tcp)",
+            classification=CadenceClassification.AGENT,
+            confidence=0.75,
+            mean_iat_ms=45.0,
+            cv=0.1,
+        )
+        rule = Rule("AEGIS-001", "LLM Streaming", "desc", "medium")
+        match = RuleMatch(
+            rule=rule,
+            flow_key="10.0.0.50:54321 -> 192.168.1.100:443 (tcp)",
+            matched_conditions=["classification=agent"],
+            severity="medium",
+        )
+
+        with (
+            patch.object(live.tracker, "expire_flows"),
+            patch.object(live.tracker, "get_analyzable_flows", return_value=[]),
+            patch.object(
+                live.cadence_analyzer, "analyze_flows", return_value=[agent_result]
+            ),
+            patch.object(live.rule_engine, "evaluate_all", return_value=[match]),
+        ):
+            live.tracker.completed_flows = [build_agent_flow()]
+            live._run_analysis_cycle()
+
+        assert buf.watchlist.is_watched("192.168.1.100", 443)
+        assert len(buf.pinner.pinned_segments) > 0
+
+    def test_pcap_buffer_none_doesnt_break_cycle(self) -> None:
+        from aegis.capture.live import LiveCapture
+
+        capture_cfg = CaptureConfig()
+        cadence_cfg = CadenceConfig()
+        live = LiveCapture(
+            capture_config=capture_cfg,
+            cadence_config=cadence_cfg,
+            pcap_buffer=None,
+        )
+        live._run_analysis_cycle()

@@ -17,6 +17,7 @@ from .detection.cadence import CadenceAnalyzer, CadenceClassification, CadenceRe
 from .detection.rules import RuleEngine, RuleMatch
 from .detection.analyzer import ThreatAnalyzer, ThreatVerdict
 from .alerting.pipeline import AlertPipeline
+from .capture.live import LiveCapture, AnalysisCycleResult, MonitorStats
 
 
 console = Console()
@@ -241,6 +242,196 @@ def rules(config: str | None) -> None:
 
     console.print(table)
     console.print(f"\n[bold]{len(engine.rules)}[/] rules loaded")
+
+
+@main.command()
+@click.option(
+    "--interface",
+    "-i",
+    type=str,
+    default="any",
+    help="Network interface to capture on (default: any).",
+)
+@click.option(
+    "--filter",
+    "-f",
+    "bpf_filter",
+    type=str,
+    default="tcp",
+    help="BPF filter expression (default: tcp).",
+)
+@click.option(
+    "--interval",
+    type=float,
+    default=10.0,
+    help="Analysis interval in seconds (default: 10).",
+)
+@click.option(
+    "--config",
+    "-c",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to aegis config YAML file.",
+)
+@click.option(
+    "--skip-llm",
+    is_flag=True,
+    help="Skip LLM threat analysis.",
+)
+@click.option("--verbose", "-v", is_flag=True, help="Verbose output.")
+@click.option(
+    "--pcap-dir",
+    type=click.Path(),
+    default="./aegis-data/pcap/live",
+    help="Directory for PCAP ring buffer segments (default: ./aegis-data/pcap/live).",
+)
+@click.option(
+    "--preserve",
+    is_flag=True,
+    help="Enable PCAP ring buffer (requires tcpdump).",
+)
+@click.option(
+    "--kernel-net",
+    is_flag=True,
+    help="Enable eBPF kernel network monitoring for PID attribution (requires ebpf-sensors).",
+)
+def monitor(
+    interface: str,
+    bpf_filter: str,
+    interval: float,
+    config: str | None,
+    skip_llm: bool,
+    verbose: bool,
+    pcap_dir: str,
+    preserve: bool,
+    kernel_net: bool,
+) -> None:
+    """Live network monitoring for agentic traffic patterns.
+
+    Captures packets in real-time and analyzes them for C2 beaconing,
+    LLM-driven traffic, and other agentic attack indicators.
+
+    Requires elevated privileges (sudo) for packet capture on most systems.
+    """
+    cfg = AegisConfig.from_file(Path(config)) if config else AegisConfig()
+    cfg.verbose = verbose
+    cfg.capture.interface = interface
+    cfg.capture.bpf_filter = bpf_filter
+    cfg.ensure_dirs()
+
+    pcap_buffer = None
+    if preserve:
+        from .capture.pcap_buffer import PcapRingBuffer
+
+        pcap_buffer = PcapRingBuffer(pcap_dir=Path(pcap_dir))
+
+    kernel_collector = None
+    if kernel_net:
+        from .capture.kernel_net import ebpf_sensors_available, KernelNetCollector
+
+        if ebpf_sensors_available():
+            try:
+                kernel_collector = KernelNetCollector()
+            except RuntimeError as exc:
+                console.print(
+                    f"[yellow]Warning: Could not initialize kernel net collector: {exc}[/]"
+                )
+        else:
+            console.print(
+                "[yellow]Warning: --kernel-net requires ebpf-sensors package. "
+                "Install with: pip install ebpf-sensors[/]"
+            )
+
+    _print_banner()
+    console.print("[bold]Live Network Monitoring[/]")
+    console.print(f"  Interface: [bold]{interface}[/]")
+    console.print(f"  BPF filter: [bold]{bpf_filter}[/]")
+    console.print(f"  Analysis interval: [bold]{interval}s[/]")
+    console.print(f"  Rules loaded: [bold]{9}[/] (7 builtin + 2 C2 beaconing)")
+    if pcap_buffer:
+        console.print(f"  PCAP ring buffer: [bold]{pcap_dir}[/]")
+    if kernel_collector:
+        console.print("  Kernel net monitor: [bold green]enabled[/]")
+    console.print("\n  Press [bold]Ctrl+C[/] to stop monitoring.\n")
+    console.rule("[bold cyan]Live Capture Active[/]")
+
+    live = LiveCapture(
+        capture_config=cfg.capture,
+        cadence_config=cfg.cadence,
+        rules_dir=cfg.rules.rules_dir,
+        analysis_interval=interval,
+        pcap_buffer=pcap_buffer,
+        kernel_net_collector=kernel_collector,
+    )
+
+    def on_result(result: AnalysisCycleResult) -> None:
+        """Print analysis results in real-time."""
+        if not result.cadence_results and not result.rule_matches:
+            if verbose:
+                console.print(
+                    f"  [dim]Cycle {result.cycle_number}: no analyzable flows[/]"
+                )
+            return
+
+        ts = time.strftime("%H:%M:%S")
+
+        for cr in result.cadence_results:
+            style = (
+                "red"
+                if cr.classification.value == "agent"
+                else ("yellow" if cr.classification.value == "mixed" else "green")
+            )
+            console.print(
+                f"  [{style}][{ts}][/] "
+                f"[{style}]{cr.classification.value.upper():>7}[/] "
+                f"{cr.flow_key_str} "
+                f"IAT={cr.mean_iat_ms:.0f}ms CV={cr.cv:.3f} "
+                f"conf={cr.confidence:.0%}"
+            )
+            if cr.best_model_match:
+                console.print(f"           Model: [bold]{cr.best_model_match}[/]")
+
+        for rm in result.rule_matches:
+            sev_style = SEVERITY_STYLES.get(rm.severity, "dim")
+            console.print(
+                f"  [bold {sev_style}][{ts}] ALERT: {rm.rule.name}[/] "
+                f"({rm.severity.upper()}) -- {rm.flow_key[:50]}"
+            )
+            for cond in rm.matched_conditions[:3]:
+                console.print(f"           {cond}")
+
+    if pcap_buffer:
+        pcap_buffer.start(interface=interface, bpf_filter=bpf_filter)
+
+    try:
+        live.start(on_result=on_result)
+    except PermissionError:
+        console.print(
+            "\n[bold red]Permission denied.[/] Live capture requires elevated privileges."
+        )
+        console.print("Run with: [bold]sudo aegis monitor[/]")
+        sys.exit(1)
+    except RuntimeError as e:
+        console.print(f"\n[bold red]Error:[/] {e}")
+        sys.exit(1)
+    finally:
+        if pcap_buffer:
+            pcap_buffer.stop()
+        stats = live.stats
+        console.rule("[bold cyan]Monitoring Complete[/]")
+        console.print(f"\n  Packets captured: [bold]{stats.packets_captured:,}[/]")
+        console.print(f"  Flows analyzed:   [bold]{stats.flows_analyzed}[/]")
+        console.print(f"  Alerts generated: [bold]{stats.alerts_generated}[/]")
+        console.print(f"  Analysis cycles:  [bold]{stats.analysis_cycles}[/]")
+        console.print(f"  Uptime:           [bold]{stats.uptime_seconds:.1f}s[/]")
+        console.print(
+            f"  Rate:             [bold]{stats.packets_per_second:.1f} pkt/s[/]"
+        )
+        if pcap_buffer:
+            console.print(
+                f"  PCAP segments:    [bold]{pcap_buffer.segments_written}[/] written, "
+                f"[bold]{pcap_buffer.segments_preserved}[/] preserved"
+            )
 
 
 def _print_banner() -> None:
