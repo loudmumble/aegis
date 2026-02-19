@@ -1,7 +1,23 @@
 startCommand:
   type: stdio
-  configSchema: {}
-  commandFunction:
-    - python
-    - -m
-    - aegis.mcp_server
+  configSchema:
+    type: object
+    properties:
+      ollamaUrl:
+        type: string
+        description: "Ollama base URL for LLM threat analysis"
+      model:
+        type: string
+        description: "Ollama model name (e.g. qwen3-coder:latest, llama3.1:70b)"
+  exampleConfig:
+    ollamaUrl: "http://localhost:11434"
+    model: "qwen3-coder:latest"
+  commandFunction: |-
+    (config) => ({
+      command: 'python',
+      args: ['-m', 'aegis.mcp_server'],
+      env: {
+        OLLAMA_URL: config.ollamaUrl || '',
+        OLLAMA_MODEL: config.model || ''
+      }
+    })
