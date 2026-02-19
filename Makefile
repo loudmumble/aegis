@@ -1,14 +1,11 @@
-.PHONY: install build build-ui test clean
+.PHONY: build build-ui test clean
 
 BINARY_NAME := aegis
 BUILD_DIR   := build
 ENTRY_MOD   := aegis.cli
 ENTRY_FUNC  := main
 
-install:
-	pip install -e .
-
-build: install
+build:
 	@mkdir -p $(BUILD_DIR)/.work
 	@echo 'from $(ENTRY_MOD) import $(ENTRY_FUNC); $(ENTRY_FUNC)()' > $(BUILD_DIR)/.work/entry.py
 	pyinstaller --onefile \
