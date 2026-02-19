@@ -7,11 +7,31 @@ import yaml
 @dataclass
 class OllamaConfig:
     base_url: str = "http://192.168.50.69:11434"
-    model: str = "mistral:latest"
-    reasoning_model: str = "mistral:latest"
+    model: str = "hog-security-v2"
+    reasoning_model: str = "hog-security-v2"
     temperature: float = 0.1
     timeout: int = 120
     max_tokens: int = 4096
+
+
+@dataclass
+class EmbeddedModelConfig:
+    """Configuration for the embedded GGUF model (llama-cpp-python)."""
+
+    model_path: str = ""  # auto-discovered if empty
+    n_ctx: int = 2048  # context window size
+    n_threads: int = 0  # 0 = auto-detect CPU count
+    n_gpu_layers: int = 0  # 0 = CPU only, -1 = all layers on GPU
+    verbose: bool = False
+
+
+@dataclass
+class HybridLLMConfig:
+    """Configuration for the hybrid LLM backend (embedded + Ollama fallback)."""
+
+    backend: str = "auto"  # "auto" | "embedded" | "ollama"
+    embedded: EmbeddedModelConfig = field(default_factory=EmbeddedModelConfig)
+    ollama: OllamaConfig = field(default_factory=OllamaConfig)
 
 
 @dataclass
@@ -63,11 +83,15 @@ class AlertConfig:
 @dataclass
 class AegisConfig:
     ollama: OllamaConfig = field(default_factory=OllamaConfig)
+    llm: HybridLLMConfig = field(default_factory=HybridLLMConfig)
     capture: CaptureConfig = field(default_factory=CaptureConfig)
     cadence: CadenceConfig = field(default_factory=CadenceConfig)
     rules: RulesConfig = field(default_factory=RulesConfig)
     alerts: AlertConfig = field(default_factory=AlertConfig)
     verbose: bool = False
+
+    def __post_init__(self):
+        self.llm.ollama = self.ollama
 
     @classmethod
     def from_file(cls, path: Path) -> "AegisConfig":
@@ -86,8 +110,22 @@ class AegisConfig:
                                 setattr(section, k, Path(v))
                             else:
                                 setattr(section, k, v)
+            if "embedded" in data:
+                for k, v in data["embedded"].items():
+                    setattr(config.llm.embedded, k, v)
+            if "llm" in data:
+                llm_data = data["llm"]
+                if "backend" in llm_data:
+                    config.llm.backend = llm_data["backend"]
+                if "embedded" in llm_data:
+                    for k, v in llm_data["embedded"].items():
+                        setattr(config.llm.embedded, k, v)
+                if "ollama" in llm_data:
+                    for k, v in llm_data["ollama"].items():
+                        setattr(config.ollama, k, v)
             if "verbose" in data:
                 config.verbose = data["verbose"]
+            config.llm.ollama = config.ollama
             return config
         return cls()
 

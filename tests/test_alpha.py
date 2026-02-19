@@ -66,8 +66,8 @@ class TestOllamaConfig:
     def test_defaults(self) -> None:
         cfg = OllamaConfig()
         assert cfg.base_url == "http://192.168.50.69:11434"
-        assert cfg.model == "mistral:latest"
-        assert cfg.reasoning_model == "mistral:latest"
+        assert cfg.model == "hog-security-v2"
+        assert cfg.reasoning_model == "hog-security-v2"
         assert cfg.temperature == 0.1
         assert cfg.timeout == 120
         assert cfg.max_tokens == 4096
@@ -128,7 +128,7 @@ class TestAegisConfig:
 
     def test_from_file_nonexistent(self, tmp_path: Path) -> None:
         cfg = AegisConfig.from_file(tmp_path / "nonexistent.yml")
-        assert cfg.ollama.model == "mistral:latest"
+        assert cfg.ollama.model == "hog-security-v2"
 
     def test_from_file_valid_yaml(self, tmp_path: Path) -> None:
         config_path = tmp_path / "aegis.yml"
@@ -165,7 +165,7 @@ class TestAegisConfig:
         config_path = tmp_path / "aegis.yml"
         config_path.write_text("")
         cfg = AegisConfig.from_file(config_path)
-        assert cfg.ollama.model == "mistral:latest"
+        assert cfg.ollama.model == "hog-security-v2"
 
     def test_ensure_dirs(self, tmp_path: Path) -> None:
         cfg = AegisConfig()

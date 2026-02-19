@@ -10,7 +10,7 @@ from rich.table import Table
 
 from . import __version__
 from .config import AegisConfig
-from .llm import OllamaClient
+from .llm import HybridLLMClient
 from .capture.flows import FlowTracker
 from .capture.reader import PcapReader
 from .detection.cadence import CadenceAnalyzer, CadenceClassification, CadenceResult
@@ -131,13 +131,11 @@ def analyze(
         ]
         if suspicious:
             console.print("\n[bold]Phase 4: LLM threat analysis...[/]")
-            llm = OllamaClient(cfg.ollama)
+            llm = HybridLLMClient(cfg.llm)
 
-            with console.status("[bold cyan]Checking Ollama connectivity..."):
+            with console.status("[bold cyan]Checking LLM connectivity..."):
                 if not llm.is_available():
-                    console.print(
-                        f"[bold red]Cannot reach Ollama at {cfg.ollama.base_url}[/]"
-                    )
+                    console.print("[bold red]No LLM backend available[/]")
                     console.print("Use --skip-llm for cadence-only analysis.")
                     skip_llm = True
 

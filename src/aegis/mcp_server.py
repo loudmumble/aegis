@@ -15,7 +15,7 @@ from mcp.server.stdio import stdio_server
 import mcp.types as types
 
 from .config import AegisConfig
-from .llm import OllamaClient
+from .llm import HybridLLMClient
 from .capture.flows import FlowTracker
 from .capture.reader import PcapReader
 from .detection.cadence import CadenceAnalyzer, CadenceClassification
@@ -154,7 +154,7 @@ def _run_analyze(arguments: dict) -> dict:
     # Phase 4: LLM threat analysis
     threat_data = None
     if not skip_llm and suspicious:
-        llm = OllamaClient(cfg.ollama)
+        llm = HybridLLMClient(cfg.llm)
         if llm.is_available():
             analyzer = ThreatAnalyzer(cfg, llm)
             verdict = analyzer.analyze(cadence_results, flows)

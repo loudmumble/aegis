@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..config import AegisConfig
-from ..llm import OllamaClient
+from ..llm import HybridLLMClient
 from ..capture.flows import NetworkFlow
 from .cadence import CadenceResult, CadenceClassification
 
@@ -102,9 +102,9 @@ Respond in strict JSON:
 class ThreatAnalyzer:
     """Uses LLM reasoning to classify threats from cadence + flow data."""
 
-    def __init__(self, config: AegisConfig, llm: OllamaClient):
+    def __init__(self, config: AegisConfig, llm: HybridLLMClient):
         self.config: AegisConfig = config
-        self.llm: OllamaClient = llm
+        self.llm: HybridLLMClient = llm
 
     def analyze(
         self,
