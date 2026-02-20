@@ -6,9 +6,9 @@ import yaml
 
 @dataclass
 class OllamaConfig:
-    base_url: str = "http://192.168.50.69:11434"
-    model: str = "qwen3-coder:latest"
-    reasoning_model: str = "devstral-small-2:latest"
+    base_url: str = "http://localhost:11434"
+    model: str = "llama3.2:latest"
+    reasoning_model: str = "llama3.2:latest"
     temperature: float = 0.1
     timeout: int = 120
     max_tokens: int = 4096

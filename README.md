@@ -48,8 +48,8 @@ Aegis uses a YAML configuration file to manage detection thresholds and capture 
 
 ```yaml
 ollama:
-  base_url: "http://192.168.50.69:11434"
-  model: "qwen3-coder:latest"
+  base_url: "http://localhost:11434"
+  model: "llama3.2:latest"
 
 cadence:
   agent_regularity_threshold: 0.85
@@ -85,6 +85,15 @@ Aegis is designed as a passive network analysis pipeline that correlates packet 
 
 Aegis can ingest vulnerability findings from **Phantom** to automatically update its detection rules, creating a dynamic defense loop against newly discovered attack vectors.
 
+## Related Projects
+
+- **[de-voidlink](https://github.com/loudmumble/de-voidlink)** — Adversary simulation framework used to validate Aegis detection rules
+- **[ebpf-sensors](https://github.com/loudmumble/ebpf-sensors)** — Shared eBPF kernel sensor framework
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+---
+
+Built by [loudmumble](https://github.com/loudmumble). Research and tooling at [loudmumble.com](https://loudmumble.com).

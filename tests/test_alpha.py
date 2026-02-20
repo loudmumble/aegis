@@ -65,9 +65,9 @@ from .conftest import build_agent_flow, build_human_flow
 class TestOllamaConfig:
     def test_defaults(self) -> None:
         cfg = OllamaConfig()
-        assert cfg.base_url == "http://192.168.50.69:11434"
-        assert cfg.model == "hog-security-v2"
-        assert cfg.reasoning_model == "hog-security-v2"
+        assert cfg.base_url == "http://localhost:11434"
+        assert cfg.model == "llama3.2:latest"
+        assert cfg.reasoning_model == "llama3.2:latest"
         assert cfg.temperature == 0.1
         assert cfg.timeout == 120
         assert cfg.max_tokens == 4096

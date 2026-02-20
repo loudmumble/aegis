@@ -2,5 +2,13 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.egg-info/
-build/
 dist/
+
+# Build artifacts — keep compiled binaries, exclude build cache
+build/lib/
+build/.work/
+build/bdist.linux-x86_64/
+
+# Go UI shell (depends on private cuberoot-ui package — never push to GitHub)
+build/aegis-ui
+ui/

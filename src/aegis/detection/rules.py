@@ -168,6 +168,32 @@ BUILTIN_RULES: list[dict[str, Any]] = [
             "min_bytes": 1_000_000,
         },
     },
+    {
+        "id": "AEGIS-008",
+        "name": "C2 Beaconing Pattern",
+        "description": "Flow exhibits periodic timing consistent with C2 beacon callbacks. "
+        "Second-scale intervals (500ms-10s) with low jitter indicate automated C2 communication, "
+        "not human activity or LLM streaming.",
+        "severity": "high",
+        "tags": ["cadence", "c2", "beaconing"],
+        "conditions": {
+            "mean_iat_range": [500, 10000],
+            "cv_max": 0.30,
+            "regularity_min": 0.70,
+        },
+    },
+    {
+        "id": "AEGIS-009",
+        "name": "Periodic Network Beaconing",
+        "description": "Strong autocorrelation at second-scale intervals indicates periodic network callbacks. "
+        "Combined with beaconing-range timing, this is a high-confidence C2 indicator.",
+        "severity": "high",
+        "tags": ["cadence", "c2", "autocorrelation", "beaconing"],
+        "conditions": {
+            "autocorrelation_min": 0.70,
+            "mean_iat_range": [500, 10000],
+        },
+    },
 ]
 
 
@@ -310,6 +336,16 @@ class RuleEngine:
                 if cadence_result.regularity_score >= cond["regularity_min"]:
                     matched_conditions.append(
                         f"regularity={cadence_result.regularity_score:.3f}"
+                    )
+                else:
+                    all_match = False
+                    continue
+
+            # Autocorrelation check
+            if "autocorrelation_min" in cond:
+                if cadence_result.autocorrelation_peak >= cond["autocorrelation_min"]:
+                    matched_conditions.append(
+                        f"autocorrelation={cadence_result.autocorrelation_peak:.3f}"
                     )
                 else:
                     all_match = False

@@ -42,6 +42,18 @@ KNOWN_MODEL_PROFILES: dict[str, tuple[float, float]] = {
     "ollama-local": (45.0, 15.0),  # Wide variance for local inference
 }
 
+# Known C2 beaconing profiles (mean_ms, std_ms) — second-scale intervals
+# These detect command-and-control callback patterns, NOT LLM streaming
+KNOWN_C2_PROFILES: dict[str, tuple[float, float]] = {
+    "voidlink-aggressive": (4096.0, 819.0),  # 4096ms ± 20% jitter
+    "voidlink-paranoid": (1024.0, 307.0),  # 1024ms ± 30% jitter
+    "cobalt-strike-default": (60000.0, 12000.0),  # 60s ± 20%
+    "cobalt-strike-fast": (5000.0, 1000.0),  # 5s ± 20%
+    "generic-beacon-1s": (1000.0, 200.0),  # 1s ± 20%
+    "generic-beacon-5s": (5000.0, 1000.0),  # 5s ± 20%
+    "generic-beacon-30s": (30000.0, 6000.0),  # 30s ± 20%
+}
+
 
 @dataclass
 class ModelFingerprint:
@@ -226,22 +238,33 @@ class CadenceAnalyzer:
         mean_iat: float,
         std_iat: float,
     ) -> list[ModelFingerprint]:
-        """Compare observed IAT statistics against known LLM model profiles."""
+        """Compare observed IAT statistics against known LLM model and C2 beaconing profiles."""
         fingerprints: list[ModelFingerprint] = []
 
         for model_name, (profile_mean, profile_std) in KNOWN_MODEL_PROFILES.items():
-            # Mahalanobis-like distance
             mean_dist = abs(mean_iat - profile_mean) / max(profile_std, 1.0)
             std_dist = abs(std_iat - profile_std) / max(profile_std, 1.0)
             distance = (mean_dist**2 + std_dist**2) ** 0.5
-
-            # Convert distance to confidence (Gaussian falloff)
             confidence = float(np.exp(-(distance**2) / 4.0))
-
             if confidence > 0.1:
                 fingerprints.append(
                     ModelFingerprint(
                         model_name=model_name,
+                        confidence=confidence,
+                        mean_iat_ms=mean_iat,
+                        profile_distance=distance,
+                    )
+                )
+
+        for profile_name, (profile_mean, profile_std) in KNOWN_C2_PROFILES.items():
+            mean_dist = abs(mean_iat - profile_mean) / max(profile_std, 1.0)
+            std_dist = abs(std_iat - profile_std) / max(profile_std, 1.0)
+            distance = (mean_dist**2 + std_dist**2) ** 0.5
+            confidence = float(np.exp(-(distance**2) / 4.0))
+            if confidence > 0.1:
+                fingerprints.append(
+                    ModelFingerprint(
+                        model_name=f"c2:{profile_name}",
                         confidence=confidence,
                         mean_iat_ms=mean_iat,
                         profile_distance=distance,
@@ -354,6 +377,13 @@ class CadenceAnalyzer:
             scores["agent"] += 0.15
             evidence.append(
                 f"IAT in LLM streaming range ({mean_iat:.1f}ms ± {std_iat:.1f}ms)"
+            )
+
+        # Feature 6b: C2 beaconing range (500ms-10s with moderate regularity)
+        if 500.0 < mean_iat < 10000.0 and cv < 0.35:
+            scores["agent"] += 0.20
+            evidence.append(
+                f"IAT in C2 beaconing range ({mean_iat:.0f}ms ± {std_iat:.0f}ms, CV={cv:.3f})"
             )
 
         # Feature 7: No long pauses (agents don't "think" between commands)
