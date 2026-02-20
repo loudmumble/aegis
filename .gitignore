@@ -9,6 +9,6 @@ build/lib/
 build/.work/
 build/bdist.linux-x86_64/
 
-# Go UI shell (depends on private cuberoot-ui package — never push to GitHub)
+# Go UI shell (private dependency — not included in public release)
 build/aegis-ui
 ui/
