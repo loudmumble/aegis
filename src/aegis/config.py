@@ -7,7 +7,7 @@ import yaml
 @dataclass
 class OllamaConfig:
     base_url: str = "http://localhost:11434"
-    model: str = "llama3.2:latest"
+    model: str = "aegis-v2"
     reasoning_model: str = "llama3.2:latest"
     temperature: float = 0.1
     timeout: int = 120

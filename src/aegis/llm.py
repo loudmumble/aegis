@@ -14,16 +14,10 @@ from .config import EmbeddedModelConfig, HybridLLMConfig, OllamaConfig
 logger = logging.getLogger(__name__)
 
 _GGUF_SEARCH_PATTERNS = [
-    "~/.local/share/hog-security/models/hog-security*.gguf",
-    "~/.hog/models/hog-security*.gguf",
-    "/opt/hog/models/hog-security*.gguf",
-    str(
-        Path(__file__).resolve().parents[3]
-        / "hog"
-        / "backend"
-        / "models"
-        / "hog-security*.gguf"
-    ),
+    "~/.local/share/aegis/models/aegis-model*.gguf",
+    "~/.aegis/models/aegis-model*.gguf",
+    "/opt/aegis/models/aegis-model*.gguf",
+    str(Path(__file__).resolve().parents[3] / "models" / "aegis-model*.gguf"),
 ]
 
 
@@ -54,7 +48,7 @@ def _discover_gguf_model(explicit_path: str = "") -> str | None:
     if explicit_path and Path(explicit_path).is_file():
         return explicit_path
 
-    env_path = os.environ.get("HOG_MODEL_PATH", "")
+    env_path = os.environ.get("AEGIS_MODEL_PATH", "")
     if env_path and Path(env_path).is_file():
         return env_path
 
@@ -64,7 +58,7 @@ def _discover_gguf_model(explicit_path: str = "") -> str | None:
         if matches:
             return matches[0]
 
-    cwd_matches = sorted(glob.glob("hog-security*.gguf"), reverse=True)
+    cwd_matches = sorted(glob.glob("aegis-model*.gguf"), reverse=True)
     if cwd_matches:
         return cwd_matches[0]
 

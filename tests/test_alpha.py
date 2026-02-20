@@ -128,7 +128,7 @@ class TestAegisConfig:
 
     def test_from_file_nonexistent(self, tmp_path: Path) -> None:
         cfg = AegisConfig.from_file(tmp_path / "nonexistent.yml")
-        assert cfg.ollama.model == "hog-security-v2"
+        assert cfg.ollama.model == "aegis-v2"
 
     def test_from_file_valid_yaml(self, tmp_path: Path) -> None:
         config_path = tmp_path / "aegis.yml"
@@ -165,7 +165,7 @@ class TestAegisConfig:
         config_path = tmp_path / "aegis.yml"
         config_path.write_text("")
         cfg = AegisConfig.from_file(config_path)
-        assert cfg.ollama.model == "hog-security-v2"
+        assert cfg.ollama.model == "aegis-v2"
 
     def test_ensure_dirs(self, tmp_path: Path) -> None:
         cfg = AegisConfig()
